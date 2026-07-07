@@ -70,17 +70,25 @@ def main():
         df.loc[both, "twse_twd"] * ADR_RATIO / df.loc[both, "usdtwd"])
     df.loc[both, "premium"] = (
         df.loc[both, "tsm_usd"] / df.loc[both, "twse_usd_per_adr"] - 1.0)
+
+    # --- 불량 틱 필터링 ---
+    # (1) 절대 범위: 차익거래 구조상 불가능한 수준의 괴리율
+    lo, hi = SANITY
+    bad = (df["premium"] < lo) | (df["premium"] > hi)
+    # (2) 상대 기준: 21일 롤링 중앙값 대비 30%p 이상 이탈 (단일 불량 틱 감지)
+    med = df["premium"].rolling(21, center=True, min_periods=5).median()
+    bad = bad | ((df["premium"] - med).abs() > 0.30)
+    if bad.any():
+        for d in df.index[bad]:
+            print(f"[제외] {d.date()} 괴리율 {df.loc[d, 'premium']:+.1%} "
+                  f"— 불량 틱으로 판단, 통계/차트에서 제외")
+        df.loc[bad, ["twse_usd_per_adr", "premium"]] = float("nan")
+
     df["premium_ma60"] = df["premium"].rolling(60, min_periods=30).mean()
 
     valid = df["premium"].dropna()
     if valid.empty:
         sys.exit("[실패] 괴리율 계산 가능한 데이터가 없음")
-
-    lo, hi = SANITY
-    bad = valid[(valid < lo) | (valid > hi)]
-    if not bad.empty:
-        print(f"[경고] 괴리율 {lo:.0%}~{hi:.0%} 범위 밖 {len(bad)}일 "
-              f"(예: {bad.index[0].date()} {bad.iloc[0]:+.1%})")
 
     os.makedirs(OUT_DIR, exist_ok=True)
     df.round(4).to_csv(f"{OUT_DIR}/tsmc_adr_premium.csv",
